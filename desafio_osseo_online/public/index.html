@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Desafio Ósseo</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#18212f;background:#f3f6fb}
+*{box-sizing:border-box}body{margin:0;padding:18px}.wrap{max-width:760px;margin:auto}
+header{text-align:center;padding:12px 0 20px}h1{margin:0;color:#173b67;font-size:clamp(27px,6vw,38px)}header p{margin:6px 0;color:#5b6675}
+.card{background:#fff;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 5px 22px #19385a12}
+h2{font-size:20px;margin:0 0 12px;color:#173b67}label{display:block;font-weight:650;margin:12px 0 6px}
+input,textarea,select{width:100%;padding:12px;border:1px solid #ccd5e1;border-radius:10px;font:inherit;background:white}
+textarea{min-height:74px;resize:vertical}.btn{border:0;border-radius:11px;padding:12px 16px;background:#1c5b96;color:white;font-weight:750;font-size:15px;cursor:pointer;margin:8px 6px 0 0}
+.btn.alt{background:#e8eef6;color:#173b67}.btn:disabled{opacity:.45;cursor:not-allowed}
+.hidden{display:none!important}.muted{color:#637083}.error{color:#b42318;font-weight:650}.success{color:#137547;font-weight:650}
+.question-editor{border:1px solid #e0e6ef;border-radius:13px;padding:14px;margin:12px 0}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.code{font-size:30px;letter-spacing:5px;font-weight:850;color:#173b67;text-align:center}
+.player{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #edf0f5;gap:10px}
+.option{display:block;width:100%;text-align:left;background:#f1f5fa;color:#1b2a3b;border:2px solid transparent;padding:14px;border-radius:12px;margin:9px 0;font-size:16px}
+.option:disabled{opacity:.65}.option.selected{border-color:#1c5b96;background:#e6f1fc}
+.podium{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;align-items:end}
+.podium div{padding:14px 6px;border-radius:13px;background:#f1f5fa}.podium .first{background:#fff1c7;min-height:140px}.podium .second{background:#e9edf3;min-height:120px}.podium .third{background:#f8e5d7;min-height:105px}
+.medal{font-size:26px}.score{font-size:22px;font-weight:850;color:#173b67}
+.small{font-size:13px}.timer{font-size:24px;font-weight:850;color:#a54b17}
+@media(max-width:520px){body{padding:12px}.card{padding:15px}.row{grid-template-columns:1fr}.code{font-size:25px}}
+</style></head>
+<body><div class="wrap">
+<header><h1>🦴 Desafio Ósseo</h1><p>Conhecimento, rapidez e trabalho em equipe</p></header>
+<div class="card" id="home">
+<h2>Como deseja entrar?</h2>
+<button class="btn" id="showHost">Criar sala (professor)</button>
+<button class="btn alt" id="showPlayer">Entrar em uma sala (aluno)</button>
+</div>
+<section class="card hidden" id="hostSetup">
+<h2>Monte suas perguntas</h2><p class="muted small">Cadastre as perguntas da sua aula. Cada pergunta terá quatro alternativas e uma resposta correta.</p>
+<div id="questions"></div>
+<button class="btn alt" id="addQuestion">+ Adicionar pergunta</button>
+<button class="btn" id="createRoom">Criar sala</button><p id="hostError" class="error"></p>
+</section>
+<section class="card hidden" id="playerJoin">
+<h2>Entrar na partida</h2>
+<label for="roomCode">Código da sala</label><input id="roomCode" maxlength="6" placeholder="Ex.: A2BC7D" autocomplete="off">
+<label for="playerName">Seu nome</label><input id="playerName" maxlength="24" placeholder="Nome ou apelido">
+<button class="btn" id="joinRoom">Entrar</button><p id="joinError" class="error"></p>
+</section>
+<section class="card hidden" id="game">
+<div class="row"><div><div class="muted small">CÓDIGO DA SALA</div><div class="code" id="gameCode"></div></div><div><div class="muted small">PARTICIPANTES</div><div class="score" id="playerCount">0</div></div></div>
+<div id="invite" class="small muted"></div>
+<div id="hostPanel" class="hidden"><p id="hostStatus" class="muted"></p><button class="btn" id="startGame">Iniciar partida</button><button class="btn alt hidden" id="nextQuestion">Próxima pergunta</button><button class="btn alt hidden" id="finishGame">Encerrar e ver ranking</button></div>
+<div id="studentPanel" class="hidden"><p id="studentStatus" class="muted">Aguardando o professor iniciar...</p><div id="studentQuestion"></div><p id="answerFeedback"></p></div>
+<div class="card" style="background:#f8fafc;box-shadow:none;padding:14px"><h2>Placar ao vivo</h2><div id="leaderboard" class="muted">Aguardando participantes...</div></div>
+<div id="finalRanking" class="hidden"><h2>🏆 Top 3 da partida</h2><div class="podium" id="podium"></div><p class="muted small">Parabéns a todos que participaram!</p></div>
+</section>
+</div>
+<script>
+const socket = io();
+let role = null, currentState = null, myName = "";
+const $ = id => document.getElementById(id);
+function show(id){["home","hostSetup","playerJoin","game"].forEach(x=>$(x).classList.toggle("hidden",x!==id));}
+function addQuestion(){
+ const n=$("questions").children.length+1, box=document.createElement("div");
+ box.className="question-editor"; box.innerHTML=`<h3>Pergunta ${n}</h3><label>Enunciado</label><textarea class="qtext" placeholder="Digite a pergunta"></textarea><div class="row">${[0,1,2,3].map((i)=>`<div><label>Alternativa ${"ABCD"[i]}</label><input class="opt" placeholder="Texto da alternativa"></div>`).join("")}</div><label>Resposta correta</label><select class="correct"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select><button class="btn alt remove">Remover pergunta</button>`;
+ box.querySelector(".remove").onclick=()=>{box.remove();[...$("questions").children].forEach((el,i)=>el.querySelector("h3").textContent=`Pergunta ${i+1}`)};
+ $("questions").appendChild(box);
+}
+$("showHost").onclick=()=>{role="host";show("hostSetup");if(!$("questions").children.length)addQuestion()};
+$("showPlayer").onclick=()=>{role="player";show("playerJoin")};
+$("addQuestion").onclick=addQuestion;
+$("createRoom").onclick=()=>{
+ const questions=[...$("questions").children].map(el=>({text:el.querySelector(".qtext").value,options:[...el.querySelectorAll(".opt")].map(x=>x.value),correct:Number(el.querySelector(".correct").value)}));
+ $("hostError").textContent="";
+ socket.emit("host:create",{questions},res=>{if(!res?.ok){$("hostError").textContent=res?.error||"Não foi possível criar a sala.";return}role="host";show("game");$("hostPanel").classList.remove("hidden");$("studentPanel").classList.add("hidden");$("gameCode").textContent=res.code;render(res.state);$("invite").textContent="Compartilhe o endereço desta página e o código da sala com os alunos.";});
+};
+$("joinRoom").onclick=()=>{
+ $("joinError").textContent="";myName=$("playerName").value.trim();
+ socket.emit("player:join",{code:$("roomCode").value,name:myName},res=>{if(!res?.ok){$("joinError").textContent=res?.error||"Não foi possível entrar.";return}role="player";show("game");$("studentPanel").classList.remove("hidden");$("hostPanel").classList.add("hidden");$("gameCode").textContent=res.state.code;render(res.state);});
+};
+$("startGame").onclick=()=>socket.emit("host:start",{},res=>{if(!res?.ok)$("hostStatus").textContent=res.error});
+$("nextQuestion").onclick=()=>socket.emit("host:next",{},res=>{if(!res?.ok)$("hostStatus").textContent=res.error});
+$("finishGame").onclick=()=>socket.emit("host:finish",{});
+function render(state){
+ currentState=state;
+ $("playerCount").textContent=state.players.length;
+ $("leaderboard").innerHTML=state.players.length?state.players.map((p,i)=>`<div class="player"><span>${i+1}. ${escapeHtml(p.name)}</span><strong>${p.score} pts</strong></div>`).join(""):"Ninguém entrou ainda.";
+ if(role==="host"){
+  $("hostStatus").textContent=state.status==="waiting"?"Aguardando os alunos entrarem.":state.status==="question"?`Pergunta ${state.questionIndex+1} de ${state.questionCount} em andamento.`:state.status==="between"?"Tempo encerrado. Veja o placar e avance.":state.status==="finished"?"Partida encerrada.":"";
+  $("startGame").classList.toggle("hidden",state.status!=="waiting");
+  $("nextQuestion").classList.toggle("hidden",state.status!=="between");
+  $("finishGame").classList.toggle("hidden",!["question","between"].includes(state.status));
+ }
+ if(role==="player"){
+  const q=state.question;
+  if(state.status==="waiting")$("studentStatus").textContent="Você entrou! Aguarde o professor iniciar.";
+  if(state.status==="question"&&q){
+   $("studentStatus").innerHTML=`Pergunta ${q.number} de ${q.total} · <span class="timer" id="countdown">15 s</span>`;
+   $("studentQuestion").innerHTML=`<h2>${escapeHtml(q.text)}</h2>`+q.options.map((o,i)=>`<button class="option" data-choice="${i}">${"ABCD"[i]}. ${escapeHtml(o)}</button>`).join("");
+   $("studentQuestion").querySelectorAll("button").forEach(b=>b.onclick=()=>{studentAnswer(Number(b.dataset.choice));$("studentQuestion").querySelectorAll("button").forEach(x=>x.disabled=true)});
+   $("answerFeedback").textContent="";
+   startCountdown(q.endsAt);
+  }
+  if(state.status==="between"){$("studentStatus").textContent="Tempo encerrado. Aguarde a próxima pergunta."; $("studentQuestion").innerHTML="";}
+  if(state.status==="finished"){$("studentStatus").textContent="Partida encerrada! Confira o ranking final."; $("studentQuestion").innerHTML="";}
+ }
+ if(state.status==="finished"){
+  $("finalRanking").classList.remove("hidden");
+  const order=state.podium||[];
+  const positions=[order[1],order[0],order[2]];
+  $("podium").innerHTML=positions.map((p,i)=>p?`<div class="${["second","first","third"][i]}"><div class="medal">${["🥈","🥇","🥉"][i]}</div><strong>${escapeHtml(p.name)}</strong><div class="score">${p.score}</div><span class="small">pontos</span></div>`:`<div class="${["second","first","third"][i]}"><div class="medal">${["🥈","🥇","🥉"][i]}</div><span class="muted">—</span></div>`).join("");
+ }
+}
+function studentAnswer(choice){socket.emit("player:answer",{choice},res=>{if(!res?.ok){$("answerFeedback").textContent=res?.error||"Resposta não enviada";return}$("answerFeedback").innerHTML=res.correct?`<span class="success">Correto! +${res.points} pontos. Total: ${res.total}.</span>`:`<span class="error">Não foi dessa vez. Você ganhou 0 ponto nesta pergunta.</span>`;});}
+let countdownInterval;
+function startCountdown(endsAt){clearInterval(countdownInterval);const update=()=>{const el=$("countdown");if(!el)return;el.textContent=Math.max(0,Math.ceil((endsAt-Date.now())/1000))+" s"};update();countdownInterval=setInterval(update,250)}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+socket.on("room:update",render);
+socket.on("room:host-left",()=>{$("studentStatus").textContent="O professor se desconectou da sala.";});
+</script></body></html>
